@@ -1,0 +1,30 @@
+{
+  "name": "claude-audit",
+  "version": "0.1.0",
+  "description": "Regras de trabalho, logs de sessão auditáveis e lições revisadas para o Claude Code",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "claude-audit": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jvvls/claude-audit.git"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}
