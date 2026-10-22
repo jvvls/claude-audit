@@ -3,18 +3,19 @@
 // diretório de configuração do Claude Code e registra os hooks no settings.json.
 // Uso: claude-audit-jvvls [install|uninstall] [--yes] [--dir <pasta>]
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
-const ASSETS = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
+const PKG = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MARK_START = "<!-- claude-audit:start -->";
 const MARK_END = "<!-- claude-audit:end -->";
 const WIN = process.platform === "win32";
-// Nomes dos scripts de hook deste pacote (inclui o antigo, para limpar instalações anteriores).
-const HOOK_SCRIPTS = ["check-session-log.py", "claude-notify.py", "claude-stop-notify.sh"];
+// Hooks de versões anteriores, removidos ao reinstalar ou desinstalar.
+const LEGACY = ["hooks/check-session-log.py", "hooks/claude-notify.py", "hooks/claude-stop-notify.sh"];
+const HOOK_SCRIPTS = ["check-session-log", "claude-notify", "claude-stop-notify"];
 
 const args = process.argv.slice(2);
 const dirFlag = args.indexOf("--dir");
@@ -41,41 +42,28 @@ function has(cmd: string): boolean {
   return run(cmd, ["--version"]).status === 0;
 }
 
-// O primeiro interpretador Python 3 que realmente roda (no Windows, "python3" pode ser o atalho da Store).
-function findPython(): string | undefined {
-  const candidates: [string, string[]][] = WIN
-    ? [["py", ["-3"]], ["python", []], ["python3", []]]
-    : [["python3", []], ["python", []]];
-  for (const [cmd, pre] of candidates) {
-    const r = spawnSync(cmd, [...pre, "-c", "import sys; sys.exit(sys.version_info[0] != 3)"], {
-      stdio: "ignore",
-      shell: WIN,
-    });
-    if (r.status === 0) return [cmd, ...pre].join(" ");
-  }
-  return undefined;
-}
-
 function backup(path: string): void {
   copyFileSync(path, `${path}.bak-${stamp}`);
 }
 
-// Arquivos copiados. keep: nunca sobrescreve (licoes.md guarda lições do próprio usuário).
-const FILES: { src: string; dest: string; exec?: boolean; keep?: boolean }[] = [
-  { src: "rules/como-trabalhar.md", dest: "rules/como-trabalhar.md" },
-  { src: "rules/auditoria.md", dest: "rules/auditoria.md" },
-  { src: "rules/licoes.md", dest: "rules/licoes.md", keep: true },
-  { src: "templates/session-log.md", dest: "templates/session-log.md" },
-  { src: "hooks/check-session-log.py", dest: "hooks/check-session-log.py", exec: true },
-  { src: "hooks/claude-notify.py", dest: "hooks/claude-notify.py", exec: true },
-  { src: "skills/revisar-logs/SKILL.md", dest: "skills/revisar-logs/SKILL.md" },
+// Arquivos copiados (src relativo à raiz do pacote). keep: nunca sobrescreve
+// (licoes.md guarda lições do próprio usuário). Hooks vão como .mjs: fora do pacote
+// não há package.json dizendo que são ESM.
+const FILES: { src: string; dest: string; keep?: boolean }[] = [
+  { src: "assets/rules/como-trabalhar.md", dest: "rules/como-trabalhar.md" },
+  { src: "assets/rules/auditoria.md", dest: "rules/auditoria.md" },
+  { src: "assets/rules/licoes.md", dest: "rules/licoes.md", keep: true },
+  { src: "assets/templates/session-log.md", dest: "templates/session-log.md" },
+  { src: "dist/hooks/check-session-log.js", dest: "hooks/check-session-log.mjs" },
+  { src: "dist/hooks/claude-notify.js", dest: "hooks/claude-notify.mjs" },
+  { src: "assets/skills/revisar-logs/SKILL.md", dest: "skills/revisar-logs/SKILL.md" },
 ];
 
 const same = (a: string, b: string) => readFileSync(a, "utf8") === readFileSync(b, "utf8");
 
 async function copyFiles(): Promise<void> {
   for (const f of FILES) {
-    const src = join(ASSETS, f.src);
+    const src = join(PKG, f.src);
     const dest = join(claudeDir, f.dest);
     mkdirSync(dirname(dest), { recursive: true });
     if (existsSync(dest)) {
@@ -94,16 +82,26 @@ async function copyFiles(): Promise<void> {
       backup(dest);
     }
     copyFileSync(src, dest);
-    if (f.exec && !WIN) chmodSync(dest, 0o755);
     console.log(`  + ${f.dest}`);
   }
 }
 
+// Hooks de versões anteriores: foram gerados pelo pacote, então saem sem perguntar.
+function removeLegacy(): void {
+  for (const rel of LEGACY) {
+    const path = join(claudeDir, rel);
+    if (!existsSync(path)) continue;
+    rmSync(path);
+    console.log(`  - ${rel} (versão anterior)`);
+  }
+}
+
 async function removeFiles(): Promise<void> {
-  for (const f of [...FILES, { src: "", dest: "hooks/claude-stop-notify.sh" }]) {
+  removeLegacy();
+  for (const f of FILES) {
     const dest = join(claudeDir, f.dest);
     if (!existsSync(dest)) continue;
-    const pristine = f.src !== "" && same(join(ASSETS, f.src), dest);
+    const pristine = same(join(PKG, f.src), dest);
     if (!pristine && !(await ask(`  ${f.dest} foi alterado. Remover mesmo assim (com backup)?`, false))) {
       console.log(`  · ${f.dest} mantido`);
       continue;
@@ -228,24 +226,22 @@ async function installPlugins(): Promise<void> {
 }
 
 async function install(): Promise<void> {
-  const python = findPython();
-  if (!python) console.log("  ! Python 3 não encontrado: os hooks não vão rodar até ele ser instalado.\n");
-  const py = python ?? (WIN ? "python" : "python3");
-  const hook = (name: string) => `${py} "${join(claudeDir, "hooks", name)}"`;
+  const hook = (name: string) => `node "${join(claudeDir, "hooks", name)}"`;
 
   console.log("Arquivos:");
+  removeLegacy();
   await copyFiles();
-  writeClaudeMd(`${MARK_START}\n${readFileSync(join(ASSETS, "CLAUDE.md"), "utf8").trim()}\n${MARK_END}`);
+  writeClaudeMd(`${MARK_START}\n${readFileSync(join(PKG, "assets", "CLAUDE.md"), "utf8").trim()}\n${MARK_END}`);
 
   const notify = await ask("\nAtivar notificação de desktop ao terminar e ao pedir input?", false);
   writeSettings((s) => {
     stripHooks(s);
     // Sem trailer Co-Authored-By nos commits.
     s.attribution = { ...s.attribution, commit: "" };
-    addHook(s, "Stop", hook("check-session-log.py"), 15);
+    addHook(s, "Stop", hook("check-session-log.mjs"), 15);
     if (notify) {
-      addHook(s, "Stop", `${hook("claude-notify.py")} stop`, 10);
-      addHook(s, "Notification", `${hook("claude-notify.py")} input`, 10);
+      addHook(s, "Stop", `${hook("claude-notify.mjs")} stop`, 10);
+      addHook(s, "Notification", `${hook("claude-notify.mjs")} input`, 10);
     }
   }, `+ settings.json (hooks${notify ? " + notificação" : ""})`);
 
