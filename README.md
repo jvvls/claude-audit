@@ -9,7 +9,7 @@ npx claude-audit-jvvls          # ou: npx github:jvvls/claude-audit
 npx claude-audit-jvvls uninstall
 ```
 
-Funciona em Linux, macOS e Windows. Requer Node ≥ 18 e Python 3 (`python3`, `python` ou `py -3`, detectado na instalação). O instalador:
+Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node ≥ 20; instalador e hooks são TypeScript compilado, sem outras dependências. O instalador:
 
 - copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e a skill `/revisar-logs`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
 - adiciona ao `~/.claude/CLAUDE.md` um bloco de commits entre marcadores `claude-audit`;
@@ -29,8 +29,8 @@ Funciona em Linux, macOS e Windows. Requer Node ≥ 18 e Python 3 (`python3`, `p
 | `auditoria.md` | `rules/` | Onde e quando escrever o log de sessão; ciclo log → revisão → lição |
 | `licoes.md` | `rules/` | Lições globais aprovadas por humano (começa com L1–L2) |
 | `session-log.md` | `templates/` | Estrutura do log: hipóteses, decisões com fonte, correções, validação |
-| `check-session-log.py` | `hooks/` (Stop) | Bloqueia o fim do turno se a sessão editou arquivos do projeto e não há log com o `session:` dela |
-| `claude-notify.py` | `hooks/` (Stop e Notification, opcional) | Notifica ao terminar (exceto com subagents ainda rodando) e ao pedir input |
+| `check-session-log.mjs` | `hooks/` (Stop) | Bloqueia o fim do turno se a sessão editou arquivos do projeto e não há log com o `session:` dela |
+| `claude-notify.mjs` | `hooks/` (Stop e Notification, opcional) | Notifica ao terminar (exceto com subagents ainda rodando) e ao pedir input |
 | `revisar-logs` | `skills/` | Revisão humana dos logs e promoção de lições |
 | bloco de commits | `CLAUDE.md` | Conventional Commits, `--no-gpg-sign`, sem `Co-Authored-By`, um commit por tarefa |
 
@@ -64,8 +64,8 @@ claude plugin install context-mode@context-mode
 ## Desenvolvimento
 
 ```bash
-npm install && npm run build
+npm install && npm test
 node dist/cli.js --dir /tmp/teste-claude
 ```
 
-Arquivos instalados ficam em `assets/`; o instalador em `src/cli.ts`.
+Textos instalados ficam em `assets/`; o instalador em `src/cli.ts`; os hooks em `src/hooks/`; os testes de ponta a ponta em `src/test/`, rodados pelo GitHub Actions em Linux, macOS e Windows.
