@@ -5,9 +5,11 @@ Regras de trabalho, logs de sessão auditáveis e lições revisadas por humano 
 ## Instalação
 
 ```bash
-npx claude-audit-jvvls          # ou: npx github:jvvls/claude-audit
-npx claude-audit-jvvls uninstall
+npx github:jvvls/claude-audit
+npx github:jvvls/claude-audit uninstall
 ```
+
+Para fixar uma versão, use uma tag ou commit: `npx github:jvvls/claude-audit#v0.1.0`.
 
 Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node ≥ 20; instalador e hooks são TypeScript compilado, sem outras dependências. O instalador:
 
