@@ -5,18 +5,21 @@ Regras de trabalho, logs de sessão auditáveis e lições revisadas por humano 
 ## Instalação
 
 ```bash
-npx github:jvvls/claude-audit
+npx claude-audit-jvvls          # ou: npx github:jvvls/claude-audit
+npx claude-audit-jvvls uninstall
 ```
 
-Requer Node ≥ 18 e `python3`. O instalador:
+Funciona em Linux, macOS e Windows. Requer Node ≥ 18 e Python 3 (`python3`, `python` ou `py -3`, detectado na instalação). O instalador:
 
 - copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e a skill `/revisar-logs`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
 - adiciona ao `~/.claude/CLAUDE.md` um bloco de commits entre marcadores `claude-audit`;
 - registra o hook de log no `settings.json` e desliga o trailer `Co-Authored-By`;
-- pergunta se ativa a notificação de desktop (desativada por padrão, Linux: `notify-send` + `jq`);
+- pergunta se ativa a notificação de desktop (desativada por padrão; usa `notify-send` no Linux, `osascript` no macOS, toast do PowerShell no Windows);
 - pergunta se instala os plugins recomendados.
 
-`--yes` aceita os padrões sem perguntar (sem notificação, sem plugins). `--dir <pasta>` instala em outra pasta. Rodar de novo é seguro: só altera o que mudou.
+`--yes` aceita os padrões sem perguntar (sem notificação, sem plugins). `--dir <pasta>` instala em outra pasta. Rodar de novo é seguro: só altera o que mudou, e a resposta sobre notificação liga ou desliga os hooks dela.
+
+`uninstall` remove os arquivos que não foram alterados (pergunta sobre os alterados, como um `licoes.md` com lições suas), o bloco do `CLAUDE.md` e os hooks do pacote no `settings.json`, mantendo seus outros hooks. Logs dos projetos e plugins ficam.
 
 ## O que vem no pacote
 
@@ -27,7 +30,7 @@ Requer Node ≥ 18 e `python3`. O instalador:
 | `licoes.md` | `rules/` | Lições globais aprovadas por humano (começa com L1–L2) |
 | `session-log.md` | `templates/` | Estrutura do log: hipóteses, decisões com fonte, correções, validação |
 | `check-session-log.py` | `hooks/` (Stop) | Bloqueia o fim do turno se a sessão editou arquivos do projeto e não há log com o `session:` dela |
-| `claude-stop-notify.sh` | `hooks/` (Stop, opcional) | Notifica ao terminar, exceto com subagents ainda rodando |
+| `claude-notify.py` | `hooks/` (Stop e Notification, opcional) | Notifica ao terminar (exceto com subagents ainda rodando) e ao pedir input |
 | `revisar-logs` | `skills/` | Revisão humana dos logs e promoção de lições |
 | bloco de commits | `CLAUDE.md` | Conventional Commits, `--no-gpg-sign`, sem `Co-Authored-By`, um commit por tarefa |
 
