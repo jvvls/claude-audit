@@ -1,11 +1,11 @@
 {
-  "name": "claude-audit",
+  "name": "claude-audit-jvvls",
   "version": "0.1.0",
   "description": "Regras de trabalho, logs de sessão auditáveis e lições revisadas para o Claude Code",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "claude-audit": "dist/cli.js"
+    "claude-audit-jvvls": "dist/cli.js"
   },
   "files": [
     "dist",
