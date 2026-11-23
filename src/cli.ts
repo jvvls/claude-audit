@@ -59,6 +59,7 @@ const FILES: { src: string; dest: string; keep?: boolean }[] = [
   { src: "dist/hooks/historico.js", dest: "hooks/historico.mjs" },
   { src: "assets/skills/revisar-logs/SKILL.md", dest: "skills/revisar-logs/SKILL.md" },
   { src: "assets/skills/relatorio/SKILL.md", dest: "skills/relatorio/SKILL.md" },
+  { src: "assets/skills/push/SKILL.md", dest: "skills/push/SKILL.md" },
 ];
 
 const same = (a: string, b: string) => readFileSync(a, "utf8") === readFileSync(b, "utf8");
@@ -253,7 +254,7 @@ async function install(): Promise<void> {
   console.log("\nPlugins recomendados:");
   await installPlugins();
 
-  console.log("\nPronto. Reinicie o Claude Code para carregar regras, hooks e as skills /revisar-logs e /relatorio.");
+  console.log("\nPronto. Reinicie o Claude Code para carregar regras, hooks e as skills /revisar-logs, /relatorio e /push.");
 }
 
 async function uninstall(): Promise<void> {

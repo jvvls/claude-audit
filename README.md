@@ -13,7 +13,7 @@ Para fixar uma versão, use uma tag ou commit: `npx github:jvvls/claude-audit#v0
 
 Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node ≥ 20; instalador e hooks são TypeScript compilado, sem outras dependências. O instalador:
 
-- copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e as skills `/revisar-logs` e `/relatorio`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
+- copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e as skills `/revisar-logs`, `/relatorio` e `/push`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
 - adiciona ao `~/.claude/CLAUDE.md` um bloco de commits entre marcadores `claude-audit`;
 - registra no `settings.json` o hook de log e o de histórico, e desliga o trailer `Co-Authored-By`;
 - pergunta se ativa a notificação de desktop (desativada por padrão; usa `notify-send` no Linux, `osascript` no macOS, toast do PowerShell no Windows);
@@ -36,6 +36,7 @@ Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node �
 | `historico.mjs` | `hooks/` (SessionStart e SessionEnd) | Guarda cada conversa como ficha em `historico/AAAA/MM/<projeto>/` antes que o Claude Code a apague (30 dias); avisa de mês fechado sem relatório |
 | `revisar-logs` | `skills/` | Revisão humana dos logs e promoção de lições |
 | `relatorio` | `skills/` | Relatório mensal e anual (geral ou por projeto) cruzado com as lições, e busca de tarefas antigas |
+| `push` | `skills/` | `/push`: commita o que está pendente em commits atômicos (Conventional Commits, sem `Co-Authored-By`) e faz push para a branch atual, sem nunca forçar; só roda quando você digita |
 | bloco de commits | `CLAUDE.md` | Conventional Commits, `--no-gpg-sign`, sem `Co-Authored-By`, um commit por tarefa |
 
 ## Fluxo de uso

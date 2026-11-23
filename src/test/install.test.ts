@@ -33,7 +33,7 @@ test("instala, é idempotente e preserva o que é do usuário", () => {
   cli(dir);
   for (const f of ["rules/como-trabalhar.md", "rules/auditoria.md", "rules/licoes.md", "templates/session-log.md",
     "hooks/check-session-log.mjs", "hooks/claude-notify.mjs", "hooks/historico.mjs", "skills/revisar-logs/SKILL.md",
-    "skills/relatorio/SKILL.md"]) {
+    "skills/relatorio/SKILL.md", "skills/push/SKILL.md"]) {
     assert.ok(existsSync(join(dir, f)), f);
   }
   const claudeMd = readFileSync(join(dir, "CLAUDE.md"), "utf8");
