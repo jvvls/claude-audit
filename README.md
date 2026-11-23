@@ -13,15 +13,15 @@ Para fixar uma versão, use uma tag ou commit: `npx github:jvvls/claude-audit#v0
 
 Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node ≥ 20; instalador e hooks são TypeScript compilado, sem outras dependências. O instalador:
 
-- copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e a skill `/revisar-logs`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
+- copia para `~/.claude/` (ou `$CLAUDE_CONFIG_DIR`) as regras, o template de log, os hooks e as skills `/revisar-logs` e `/relatorio`, com backup `.bak-<data>` do que for sobrescrito (`rules/licoes.md` nunca é sobrescrito);
 - adiciona ao `~/.claude/CLAUDE.md` um bloco de commits entre marcadores `claude-audit`;
-- registra o hook de log no `settings.json` e desliga o trailer `Co-Authored-By`;
+- registra no `settings.json` o hook de log e o de histórico, e desliga o trailer `Co-Authored-By`;
 - pergunta se ativa a notificação de desktop (desativada por padrão; usa `notify-send` no Linux, `osascript` no macOS, toast do PowerShell no Windows);
 - pergunta se instala os plugins recomendados.
 
 `--yes` aceita os padrões sem perguntar (sem notificação, sem plugins). `--dir <pasta>` instala em outra pasta. Rodar de novo é seguro: só altera o que mudou, e a resposta sobre notificação liga ou desliga os hooks dela.
 
-`uninstall` remove os arquivos que não foram alterados (pergunta sobre os alterados, como um `licoes.md` com lições suas), o bloco do `CLAUDE.md` e os hooks do pacote no `settings.json`, mantendo seus outros hooks. Logs dos projetos e plugins ficam.
+`uninstall` remove os arquivos que não foram alterados (pergunta sobre os alterados, como um `licoes.md` com lições suas), o bloco do `CLAUDE.md` e os hooks do pacote no `settings.json`, mantendo seus outros hooks. Logs dos projetos, o histórico em `~/.claude/historico/` e plugins ficam.
 
 ## O que vem no pacote
 
@@ -33,7 +33,9 @@ Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node �
 | `session-log.md` | `templates/` | Estrutura do log: hipóteses, decisões com fonte, correções, validação |
 | `check-session-log.mjs` | `hooks/` (Stop) | Bloqueia o fim do turno se a sessão editou arquivos do projeto e não há log com o `session:` dela |
 | `claude-notify.mjs` | `hooks/` (Stop e Notification, opcional) | Notifica ao terminar (exceto com subagents ainda rodando) e ao pedir input |
+| `historico.mjs` | `hooks/` (SessionStart e SessionEnd) | Guarda cada conversa como ficha em `historico/AAAA/MM/<projeto>/` antes que o Claude Code a apague (30 dias); avisa de mês fechado sem relatório |
 | `revisar-logs` | `skills/` | Revisão humana dos logs e promoção de lições |
+| `relatorio` | `skills/` | Relatório mensal e anual (geral ou por projeto) cruzado com as lições, e busca de tarefas antigas |
 | bloco de commits | `CLAUDE.md` | Conventional Commits, `--no-gpg-sign`, sem `Co-Authored-By`, um commit por tarefa |
 
 ## Fluxo de uso
@@ -43,6 +45,18 @@ Funciona em Linux, macOS e Windows (testado no CI nos três). Só requer Node �
 3. **No fim do turno**, o hook confere: houve edição no projeto sem log desta sessão? Então o Claude é obrigado a escrever o log antes de parar. Para desligar num projeto, crie `.claude/audit-off`.
 4. **Quando quiser revisar**, rode `/revisar-logs`. A skill lista os logs pendentes, aponta erros e diagnósticos furados e propõe lições. Você aprova cada uma e escolhe o nível: global (`~/.claude/rules/licoes.md`) ou do projeto (`<projeto>/.claude/rules/licoes.md`).
 5. **As lições aprovadas** carregam em toda sessão seguinte. Quando uma vira regra permanente num CLAUDE.md, sai do arquivo de lições.
+
+## Histórico e relatórios
+
+O `/insights` nativo sobrescreve o relatório anterior, analisa só parte das sessões e não lê os logs de auditoria. Este pacote mantém um histórico próprio:
+
+- **Fichas, sem custo de tokens.** No início e no fim de cada sessão, o hook `historico.mjs` lê as conversas de `~/.claude/projects/` e grava uma ficha por sessão em `~/.claude/historico/AAAA/MM/<projeto>/sessoes/<id>.json`: título, projeto, minutos ativos, mensagens do usuário (cada uma limitada a 2000 caracteres), arquivos editados, erros de ferramenta, commits e o log de auditoria ligado. Só código, sem modelo.
+- **`/relatorio <mês> [pastas...]`** — mês por nome, abreviação ou número (`novembro`, `nov`, `11`, `11/2026`; sem ano, o atual), filtrado por uma ou mais pastas (entra tudo que está dentro delas) — escreve `historico/AAAA/MM/<projeto>/resumo.md`, o `resumo.md` geral do mês e um `indice.md` com palavras-chave por tarefa. A fonte principal são os logs de auditoria; cada projeto e cada tarefa aparecem, independente do tamanho da conversa. O relatório cruza com as lições: quais nasceram no mês, quais erros voltaram apesar de já haver lição, quais logs seguem pendentes de revisão.
+- **`/relatorio ano [AAAA] [pastas...]`** monta o anual a partir dos mensais (sem ano, o atual). `~/Documentos/dataviva` junta todos os repos dentro dela; um texto que não é pasta vale como trecho do caminho.
+- **`/relatorio busca <descrição>`** procura nos logs, nas fichas e nos índices (e no claude-mem, se instalado) e responde data, projeto e o caminho do log.
+- **Lembrete:** quando um mês fecha sem relatório, a sessão seguinte começa oferecendo `/relatorio AAAA-MM` (no máximo uma vez por dia).
+
+O script também roda à mão: `node ~/.claude/hooks/historico.mjs arquivar | mes <mês> [ano] [pastas...] | buscar <termos...> | pendentes`.
 
 Logs ficam por projeto, não em pasta central. Recomenda-se ignorar `.claude/logs/` no git (ex.: `**/.claude/logs/` no `~/.config/git/ignore`).
 

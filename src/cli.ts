@@ -15,7 +15,7 @@ const MARK_END = "<!-- claude-audit:end -->";
 const WIN = process.platform === "win32";
 // Hooks de versões anteriores, removidos ao reinstalar ou desinstalar.
 const LEGACY = ["hooks/check-session-log.py", "hooks/claude-notify.py", "hooks/claude-stop-notify.sh"];
-const HOOK_SCRIPTS = ["check-session-log", "claude-notify", "claude-stop-notify"];
+const HOOK_SCRIPTS = ["check-session-log", "claude-notify", "claude-stop-notify", "historico"];
 
 const args = process.argv.slice(2);
 const dirFlag = args.indexOf("--dir");
@@ -56,7 +56,9 @@ const FILES: { src: string; dest: string; keep?: boolean }[] = [
   { src: "assets/templates/session-log.md", dest: "templates/session-log.md" },
   { src: "dist/hooks/check-session-log.js", dest: "hooks/check-session-log.mjs" },
   { src: "dist/hooks/claude-notify.js", dest: "hooks/claude-notify.mjs" },
+  { src: "dist/hooks/historico.js", dest: "hooks/historico.mjs" },
   { src: "assets/skills/revisar-logs/SKILL.md", dest: "skills/revisar-logs/SKILL.md" },
+  { src: "assets/skills/relatorio/SKILL.md", dest: "skills/relatorio/SKILL.md" },
 ];
 
 const same = (a: string, b: string) => readFileSync(a, "utf8") === readFileSync(b, "utf8");
@@ -239,6 +241,9 @@ async function install(): Promise<void> {
     // Sem trailer Co-Authored-By nos commits.
     s.attribution = { ...s.attribution, commit: "" };
     addHook(s, "Stop", hook("check-session-log.mjs"), 15);
+    // Fichas das conversas antes que o Claude Code as apague (30 dias).
+    addHook(s, "SessionStart", hook("historico.mjs"), 60);
+    addHook(s, "SessionEnd", hook("historico.mjs"), 60);
     if (notify) {
       addHook(s, "Stop", `${hook("claude-notify.mjs")} stop`, 10);
       addHook(s, "Notification", `${hook("claude-notify.mjs")} input`, 10);
@@ -248,7 +253,7 @@ async function install(): Promise<void> {
   console.log("\nPlugins recomendados:");
   await installPlugins();
 
-  console.log("\nPronto. Reinicie o Claude Code para carregar regras, hooks e a skill /revisar-logs.");
+  console.log("\nPronto. Reinicie o Claude Code para carregar regras, hooks e as skills /revisar-logs e /relatorio.");
 }
 
 async function uninstall(): Promise<void> {
@@ -257,7 +262,7 @@ async function uninstall(): Promise<void> {
   writeClaudeMd("");
   writeSettings(stripHooks, "- settings.json (hooks claude-audit)");
   console.log(
-    "\nRemovido. Mantidos: logs dos projetos, attribution.commit no settings.json e backups .bak-*." +
+    "\nRemovido. Mantidos: logs dos projetos, histórico de sessões (historico/), attribution.commit no settings.json e backups .bak-*." +
       "\nPlugins (GSD, claude-mem, context-mode) não são removidos por aqui.",
   );
 }
