@@ -1,6 +1,7 @@
 // Histórico de sessões: transforma cada conversa do Claude Code em uma ficha
-// (sem modelo, sem custo de tokens) antes que o Claude Code a apague, e serve de
-// entrada para a skill /relatorio. Ver skills/relatorio/SKILL.md.
+// (sem chamar modelo) antes que o Claude Code a apague, e serve de entrada para a
+// skill /relatorio. A ficha traz o custo estimado da sessão a preço de API, lido
+// do `usage` gravado no transcript. Ver skills/relatorio/SKILL.md.
 //
 // Uso:
 //   hook SessionStart/SessionEnd (JSON no stdin) → arquiva; no SessionStart avisa
@@ -24,7 +25,35 @@ const MAX_MSG = 2000; // caracteres por mensagem na ficha
 const MAX_MSG_DIGEST = 500; // caracteres por mensagem no digest do mês
 const MAX_GAP_MS = 10 * 60 * 1000; // pausa maior que isso não conta como tempo ativo
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+// Sobe quando a ficha ganha campos: as conversas que ainda existem são reprocessadas.
+const VERSAO = 2;
 
+// Preço de API em US$ por milhão de tokens: entrada, saída, leitura de cache.
+// Escrita de cache: 1,25x a entrada (5 min) e 2x (1 h). Fast mode: 2x. Busca na web: US$ 0,01.
+// É uma estimativa a preço de API, não o valor cobrado na assinatura.
+// Fonte: tabela de preços da Anthropic (2026-11); leitura de cache sem preço publicado = 0,1x a entrada.
+const PRECOS: Record<string, [number, number, number]> = {
+  "claude-fable-5-2": [8, 40, 0.2],
+  "claude-mythos-5-2": [8, 40, 0.2],
+  "claude-fable-5-1": [10, 50, 0.25],
+  "claude-mythos-5-1": [10, 50, 0.25],
+  "claude-fable-5": [10, 50, 1],
+  "claude-mythos-5": [10, 50, 1],
+  "claude-opus-5-5": [4, 20, 0.2],
+  "claude-opus-5": [5, 25, 0.5],
+  "claude-opus-4-8": [5, 25, 0.5],
+  "claude-opus-4-7": [5, 25, 0.5],
+  "claude-opus-4-6": [5, 25, 0.5],
+  "claude-sonnet-5-5": [2, 10, 0.1],
+  "claude-sonnet-5": [2, 10, 0.2],
+  "claude-sonnet-4-6": [3, 15, 0.3],
+  "claude-haiku-5-5": [0.1, 0.5, 0.01],
+  "claude-haiku-4-5": [1, 5, 0.1],
+};
+// Prefixo mais longo primeiro: "claude-opus-5-5" antes de "claude-opus-5".
+const MODELOS = Object.keys(PRECOS).sort((a, b) => b.length - a.length);
+
+type Tokens = { entrada: number; saida: number; cache_leitura: number; cache_escrita: number };
 type Ficha = {
   session: string;
   titulo: string;
@@ -39,10 +68,15 @@ type Ficha = {
   erros_ferramenta: number;
   commits: number;
   log: string | null;
+  // Estimativa a preço de API, subagentes incluídos; null quando nenhum modelo tem preço.
+  custo_usd: number | null;
+  custo_subagentes_usd: number;
+  tokens: Tokens;
+  modelos: Record<string, { requisicoes: number; custo_usd: number | null }>;
   fonte_mtime: number;
 };
 
-type Estado = { arquivadas: Record<string, number>; projetos: string[]; ultimo_aviso?: string };
+type Estado = { versao?: number; arquivadas: Record<string, number>; projetos: string[]; ultimo_aviso?: string };
 
 function lerJson<T>(path: string, padrao: T): T {
   try {
@@ -54,7 +88,7 @@ function lerJson<T>(path: string, padrao: T): T {
 
 function lerEstado(): Estado {
   const e = lerJson<Partial<Estado>>(ESTADO, {});
-  return { arquivadas: e.arquivadas ?? {}, projetos: e.projetos ?? [], ultimo_aviso: e.ultimo_aviso };
+  return { versao: e.versao, arquivadas: e.arquivadas ?? {}, projetos: e.projetos ?? [], ultimo_aviso: e.ultimo_aviso };
 }
 
 function salvar(path: string, conteudo: string): void {
@@ -122,6 +156,89 @@ function acharLog(projetoPath: string, sessionId: string): string | null {
   return null;
 }
 
+// ---------- custo ----------
+
+type Uso = { modelo: string; usage: any; subagente: boolean };
+
+// O Claude Code grava uma linha por bloco de conteúdo e repete o `usage` da
+// resposta em cada uma: conta uma vez por resposta, a de maior saída.
+function guardarUso(e: any, subagente: boolean, usos: Map<string, Uso>): void {
+  const usage = e.message?.usage;
+  const modelo = e.message?.model;
+  if (!usage || typeof modelo !== "string" || modelo === "<synthetic>") return;
+  const chave = e.message.id || e.requestId ? `${e.message.id}|${e.requestId}` : `linha:${usos.size}`;
+  const atual = usos.get(chave);
+  if (!atual || (usage.output_tokens ?? 0) > (atual.usage.output_tokens ?? 0)) {
+    usos.set(chave, { modelo, usage, subagente: subagente || !!e.isSidechain });
+  }
+}
+
+function precoDe(modelo: string): [number, number, number] | null {
+  const m = MODELOS.find((p) => modelo.startsWith(p));
+  return m ? PRECOS[m] : null;
+}
+
+const arred = (n: number) => Math.round(n * 1e6) / 1e6;
+
+function custoDeUso(u: Uso): number | null {
+  const preco = precoDe(u.modelo);
+  if (!preco) return null;
+  const [entrada, saida, leitura] = preco;
+  const us = u.usage;
+  const escrita = us.cache_creation_input_tokens ?? 0;
+  const h1 = us.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  const m5 = Math.max(escrita - h1, 0); // escrita sem TTL informado conta como 5 min
+  const tokens =
+    (us.input_tokens ?? 0) * entrada +
+    (us.output_tokens ?? 0) * saida +
+    (us.cache_read_input_tokens ?? 0) * leitura +
+    m5 * entrada * 1.25 +
+    h1 * entrada * 2;
+  const rapido = us.speed === "fast" ? 2 : 1;
+  return (tokens / 1e6) * rapido + (us.server_tool_use?.web_search_requests ?? 0) * 0.01;
+}
+
+function somarCusto(usos: Map<string, Uso>): Pick<Ficha, "custo_usd" | "custo_subagentes_usd" | "tokens" | "modelos"> {
+  const tokens: Tokens = { entrada: 0, saida: 0, cache_leitura: 0, cache_escrita: 0 };
+  const modelos: Ficha["modelos"] = {};
+  let total: number | null = null;
+  let sub = 0;
+  for (const u of usos.values()) {
+    tokens.entrada += u.usage.input_tokens ?? 0;
+    tokens.saida += u.usage.output_tokens ?? 0;
+    tokens.cache_leitura += u.usage.cache_read_input_tokens ?? 0;
+    tokens.cache_escrita += u.usage.cache_creation_input_tokens ?? 0;
+    const c = custoDeUso(u);
+    const m = (modelos[u.modelo] ??= { requisicoes: 0, custo_usd: c === null ? null : 0 });
+    m.requisicoes++;
+    if (c === null) continue;
+    m.custo_usd = arred((m.custo_usd ?? 0) + c);
+    total = (total ?? 0) + c;
+    if (u.subagente) sub += c;
+  }
+  return { custo_usd: total === null ? null : arred(total), custo_subagentes_usd: arred(sub), tokens, modelos };
+}
+
+// Transcripts de subagentes: <projeto>/<sessão>/subagents/*.jsonl, ao lado de <sessão>.jsonl.
+function arquivosSubagentes(path: string, sessionId: string): string[] {
+  const dir = join(dirname(path), sessionId, "subagents");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((n) => n.endsWith(".jsonl")).map((n) => join(dir, n));
+}
+
+function lerLinhas(path: string): any[] {
+  const linhas = [];
+  for (const linha of readFileSync(path, "utf8").split("\n")) {
+    try {
+      const e = JSON.parse(linha);
+      if (e && typeof e === "object") linhas.push(e);
+    } catch {
+      continue;
+    }
+  }
+  return linhas;
+}
+
 export function lerConversa(path: string, sessionId: string): Ficha | null {
   let titulo = "";
   let projetoPath = "";
@@ -131,15 +248,10 @@ export function lerConversa(path: string, sessionId: string): Ficha | null {
   const ferramentas: Record<string, number> = {};
   let erros = 0;
   let commits = 0;
+  const usos = new Map<string, Uso>();
 
-  for (const linha of readFileSync(path, "utf8").split("\n")) {
-    let e: any;
-    try {
-      e = JSON.parse(linha);
-    } catch {
-      continue;
-    }
-    if (!e || typeof e !== "object") continue;
+  for (const e of lerLinhas(path)) {
+    if (e.type === "assistant") guardarUso(e, false, usos);
     if (e.type === "ai-title" && e.aiTitle) titulo = String(e.aiTitle);
     if (!projetoPath && typeof e.cwd === "string") projetoPath = e.cwd;
     const t = Date.parse(e.timestamp);
@@ -166,6 +278,9 @@ export function lerConversa(path: string, sessionId: string): Ficha | null {
   }
 
   if (!mensagens.length && !Object.keys(ferramentas).length) return null;
+  for (const sub of arquivosSubagentes(path, sessionId)) {
+    for (const e of lerLinhas(sub)) if (e.type === "assistant") guardarUso(e, true, usos);
+  }
   tempos.sort((a, b) => a - b);
   let ativo = 0;
   for (let i = 1; i < tempos.length; i++) ativo += Math.min(tempos[i] - tempos[i - 1], MAX_GAP_MS);
@@ -186,8 +301,14 @@ export function lerConversa(path: string, sessionId: string): Ficha | null {
     erros_ferramenta: erros,
     commits,
     log: acharLog(projetoPath, sessionId),
-    fonte_mtime: statSync(path).mtimeMs,
+    ...somarCusto(usos),
+    fonte_mtime: mtimeConversa(path, sessionId),
   };
+}
+
+// Mudança num subagente também conta como mudança da conversa.
+function mtimeConversa(path: string, sessionId: string): number {
+  return Math.max(statSync(path).mtimeMs, ...arquivosSubagentes(path, sessionId).map((s) => statSync(s).mtimeMs));
 }
 
 function caminhoFicha(f: Ficha): string {
@@ -204,7 +325,8 @@ function conversas(): { id: string; path: string; mtime: number }[] {
     for (const arq of readdirSync(dir, { withFileTypes: true })) {
       if (!arq.isFile() || !arq.name.endsWith(".jsonl")) continue;
       const path = join(dir, arq.name);
-      lista.push({ id: arq.name.slice(0, -".jsonl".length), path, mtime: statSync(path).mtimeMs });
+      const id = arq.name.slice(0, -".jsonl".length);
+      lista.push({ id, path, mtime: mtimeConversa(path, id) });
     }
   }
   return lista;
@@ -214,8 +336,9 @@ export function arquivar(): number {
   const estado = lerEstado();
   const projetos = new Set(estado.projetos);
   let novas = 0;
+  const reprocessar = estado.versao !== VERSAO;
   for (const c of conversas()) {
-    if (estado.arquivadas[c.id] === c.mtime) continue;
+    if (!reprocessar && estado.arquivadas[c.id] === c.mtime) continue;
     let ficha: Ficha | null;
     try {
       ficha = lerConversa(c.path, c.id);
@@ -230,6 +353,7 @@ export function arquivar(): number {
     novas++;
   }
   estado.projetos = [...projetos].sort();
+  estado.versao = VERSAO;
   salvar(ESTADO, `${JSON.stringify(estado, null, 2)}\n`);
   return novas;
 }
@@ -369,6 +493,17 @@ function filtroPastas(pastas: string[]): Filtro {
   return (path) => regras.some((r) => r(path));
 }
 
+// Fichas anteriores à medição não têm custo_usd: viram "sem medição".
+const usd = (n: number | null | undefined) => (typeof n === "number" ? `US$ ${n.toFixed(2)}` : "sem medição");
+
+function custoTotal(fichas: Ficha[]): string {
+  const medidas = fichas.filter((f) => typeof f.custo_usd === "number");
+  if (!medidas.length) return "sem medição";
+  const total = usd(medidas.reduce((s, f) => s + (f.custo_usd as number), 0));
+  const faltam = fichas.length - medidas.length;
+  return faltam ? `${total} (${faltam} sessão(ões) sem medição)` : total;
+}
+
 export function digestMes(ym: string, pastas: string[] = []): string {
   const casa = filtroPastas(pastas);
   const filtro = pastas.join(", ");
@@ -393,12 +528,16 @@ export function digestMes(ym: string, pastas: string[] = []): string {
   const ordem = [...projetos.entries()].sort((a, b) => tarefas(b[1]) - tarefas(a[1]));
 
   const out: string[] = [`# Digest ${ym}${filtro ? ` (filtro: ${filtro})` : ""}`, ""];
-  out.push(`${projetos.size} projeto(s) · ${fichas.length} sessão(ões) com ficha · ${logs.length} log(s) de auditoria`);
+  out.push(
+    `${projetos.size} projeto(s) · ${fichas.length} sessão(ões) com ficha · ${logs.length} log(s) de auditoria · ` +
+      `custo estimado (preço de API): ${custoTotal(fichas)}`,
+  );
   out.push(`Lições globais: ${join(CLAUDE_DIR, "rules", "licoes.md")}`, "");
   for (const [, p] of ordem) {
     const nome = p.nome;
     const rotulo = repetidos.has(nome) ? `${nome} (${p.path})` : nome;
     out.push(`## ${rotulo} — ${tarefas(p)} tarefa(s)`, `caminho: ${p.path}`);
+    if (p.fichas.length) out.push(`custo estimado: ${custoTotal(p.fichas)}`);
     const licoes = join(p.path, ".claude", "rules", "licoes.md");
     if (existsSync(licoes)) out.push(`lições do projeto: ${licoes}`);
     const resumo = join(HIST, ...ym.split("-"), nome, "resumo.md");
@@ -417,6 +556,7 @@ export function digestMes(ym: string, pastas: string[] = []): string {
         out.push(
           `- ${dia(new Date(f.inicio))} · ${f.ativo_min} min ativos · "${f.titulo || "sem título"}" · ${f.mensagens.length} msg · ` +
             `${f.arquivos.length} arquivo(s) · ${f.erros_ferramenta} erro(s) de ferramenta · ${f.commits} commit(s) · ` +
+            `custo: ${usd(f.custo_usd)}${f.custo_subagentes_usd ? ` (subagentes ${usd(f.custo_subagentes_usd)})` : ""} · ` +
             `log: ${f.log ?? "nenhum"} · ferramentas: ${ferr || "-"} · id: ${f.session}`,
         );
         for (const m of f.mensagens) out.push(`  > ${cortar(m, MAX_MSG_DIGEST).replace(/\s*\n\s*/g, " ⏎ ")}`);

@@ -117,10 +117,28 @@ test("histórico: arquiva conversa em ficha, busca e avisa mês fechado", () => 
       { type: "user", timestamp: "2020-01-15T12:00:01Z", message: { content: "<command-name>/relatorio</command-name><command-args>busca x</command-args>" } },
       { type: "user", timestamp: "2020-01-15T12:00:02Z", origin: { kind: "task-notification" }, message: { content: "não é do usuário" } },
       { type: "user", timestamp: "2020-01-15T12:00:03Z", isMeta: true, message: { content: "meta" } },
+      // Mesma resposta em duas linhas (uma por bloco): o uso conta uma vez, o de maior saída.
+      {
+        type: "assistant",
+        timestamp: "2020-01-15T12:04:59Z",
+        requestId: "r1",
+        message: { id: "m1", model: "claude-opus-5-5", content: [], usage: { input_tokens: 1000, output_tokens: 500 } },
+      },
       {
         type: "assistant",
         timestamp: "2020-01-15T12:05:00Z",
+        requestId: "r1",
         message: {
+          id: "m1",
+          model: "claude-opus-5-5",
+          // 1000×4 + 2000×20 + 10000×0,2 + 4000×4×2 (1 h) = US$ 0,078
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 2000,
+            cache_read_input_tokens: 10000,
+            cache_creation_input_tokens: 4000,
+            cache_creation: { ephemeral_1h_input_tokens: 4000, ephemeral_5m_input_tokens: 0 },
+          },
           content: [
             { type: "tool_use", name: "Write", input: { file_path: join(proj, "src", "a.ts") } },
             { type: "tool_use", name: "Bash", input: { command: "git commit -m 'feat: x'" } },
@@ -130,7 +148,23 @@ test("histórico: arquiva conversa em ficha, busca e avisa mês fechado", () => 
       { type: "user", timestamp: "2020-01-15T12:06:00Z", message: { content: [{ type: "tool_result", is_error: true, content: "falhou" }] } },
     ),
   );
-  writeFileSync(join(dir, "projects", "p", "s2.jsonl"), linhas(copia, { type: "user", timestamp: "2020-01-16T12:00:00Z", message: { content: "outra" } }));
+  // Subagente: 1000×2 + 1000×10 + 1 busca na web = US$ 0,022
+  mkdirSync(join(dir, "projects", "p", "s1", "subagents"), { recursive: true });
+  writeFileSync(
+    join(dir, "projects", "p", "s1", "subagents", "agent-a.jsonl"),
+    linhas(proj, {
+      type: "assistant",
+      isSidechain: true,
+      requestId: "r2",
+      message: {
+        id: "m2",
+        model: "claude-sonnet-5-5",
+        content: [],
+        usage: { input_tokens: 1000, output_tokens: 1000, server_tool_use: { web_search_requests: 1 } },
+      },
+    }),
+  );
+  writeFileSync(join(dir, "projects", "p", "s2.jsonl"),linhas(copia, { type: "user", timestamp: "2020-01-16T12:00:00Z", message: { content: "outra" } }));
   const hist = join(dir, "hooks", "historico.mjs");
   const rodar = (...args: string[]) => spawnSync(process.execPath, [hist, ...args], { encoding: "utf8" });
 
@@ -146,8 +180,19 @@ test("histórico: arquiva conversa em ficha, busca e avisa mês fechado", () => 
   assert.equal(ficha.erros_ferramenta, 1);
   assert.equal(ficha.ativo_min, 6);
   assert.ok(ficha.log.endsWith("2020-01-15-webhook.md"));
+  assert.equal(ficha.custo_usd, 0.1);
+  assert.equal(ficha.custo_subagentes_usd, 0.022);
+  assert.deepEqual(ficha.tokens, { entrada: 2000, saida: 3000, cache_leitura: 10000, cache_escrita: 4000 });
+  assert.deepEqual(ficha.modelos, {
+    "claude-opus-5-5": { requisicoes: 1, custo_usd: 0.078 },
+    "claude-sonnet-5-5": { requisicoes: 1, custo_usd: 0.022 },
+  });
+  const s2 = JSON.parse(readFileSync(join(dir, "historico", "2020", "01", copia.split(/[\\/]/).at(-1)!, "sessoes", "s2.json"), "utf8"));
+  assert.equal(s2.custo_usd, null, "sem uso registrado: sem custo");
 
   const digest = rodar("mes", "2020-01").stdout;
+  assert.match(digest, /custo estimado \(preço de API\): US\$ 0\.10 \(1 sessão\(ões\) sem medição\)/);
+  assert.match(digest, /custo: US\$ 0\.10 \(subagentes US\$ 0\.02\)/);
   assert.match(digest, /1 log\(s\) de auditoria/);
   assert.match(digest, /cópia idêntica em/);
 

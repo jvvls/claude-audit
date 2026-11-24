@@ -9,7 +9,7 @@ Um hook (`historico.mjs`, em `SessionStart` e `SessionEnd`) transforma cada conv
 
 Fontes, em ordem de peso:
 1. **Logs de auditoria** (`<projeto>/.claude/logs/*.md`): o que foi pedido, decidido e corrigido. Fonte principal.
-2. **Fichas**: mensagens do usuário, arquivos, erros de ferramenta, commits, minutos ativos. Complemento e cobertura de sessões sem log.
+2. **Fichas**: mensagens do usuário, arquivos, erros de ferramenta, commits, minutos ativos, custo estimado (`custo_usd`, subagentes incluídos, a preço de API: não é o valor da assinatura). Complemento e cobertura de sessões sem log.
 3. **Lições**: `<claude>/rules/licoes.md` e `<projeto>/.claude/rules/licoes.md`.
 
 ## Modos
@@ -29,7 +29,7 @@ Sempre comece com `node <claude>/hooks/historico.mjs arquivar`, para pegar a ses
 
 ## Mensal
 
-1. `node <claude>/hooks/historico.mjs mes <mês> [ano] [pastas...]` → digest (a primeira linha, `# Digest AAAA-MM`, diz qual mês o script entendeu; use-o nos caminhos abaixo) com, por projeto: logs do mês (título, tipo, status, revisao, caminho, cópias) e sessões (data, minutos ativos, título, mensagens cortadas, arquivos, erros, commits, log ligado).
+1. `node <claude>/hooks/historico.mjs mes <mês> [ano] [pastas...]` → digest (a primeira linha, `# Digest AAAA-MM`, diz qual mês o script entendeu; use-o nos caminhos abaixo) com, por projeto: logs do mês (título, tipo, status, revisao, caminho, cópias) e sessões (data, minutos ativos, título, mensagens cortadas, arquivos, erros, commits, custo, log ligado), mais o custo estimado do mês e de cada projeto. Fichas antigas sem medição aparecem como "sem medição"; diga isso no relatório em vez de tratar como zero.
 2. Leia os logs do mês só nas seções **Pedido, Hipóteses e diagnóstico, Decisões, Correções durante a sessão, Questões em aberto**. Log com `cópia idêntica em` é uma tarefa só.
 3. Leia as lições globais e as do projeto (o digest mostra os caminhos).
 4. Escreva `<claude>/historico/AAAA/MM/<projeto>/resumo.md` para **cada** projeto do digest, com:
